@@ -1,0 +1,7 @@
+<Project>
+  <Import Project="..\..\Directory.Build.props" />
+  <PropertyGroup>
+    <!-- The test host and adapter require package imports disabled by SourceBuild.props. -->
+    <ExcludeRestorePackageImports>false</ExcludeRestorePackageImports>
+  </PropertyGroup>
+</Project>

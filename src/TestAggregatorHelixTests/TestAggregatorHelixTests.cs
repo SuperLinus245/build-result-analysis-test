@@ -7,6 +7,12 @@ namespace TestAggregatorHelixTests;
 
 public class TestAggregatorHelixTests
 {
+    [Fact]
+    public void StreamingUnmatchedHelixFailure()
+    {
+        Assert.True(false, "Streaming fixture: unmatched Helix failure");
+    }
+
     // This test is run several times
     // Based on the conent in the correlation payload file, it behaves differently, simulating different test results (pass, fail, known issue)
     [Fact]

@@ -3,63 +3,99 @@ trigger: none
 pr:
   branches:
     include:
-    - fixtures/known-issue-only
+    - fixtures/streaming-early-failure
   paths:
     include:
     - '*'
     exclude:
     - '**/*.md'
 
+parameters:
+- name: continueOnError
+  displayName: Continue after a failed Helix monitor
+  type: boolean
+  default: false
+
 pool:
   name: NetCore-Public
   demands:
   - ImageOverride -equals build.azurelinux.3.amd64.open
 
-jobs:
-- job: ScenarioHelixTest
-  displayName: Scenario Helix test
-  timeoutInMinutes: 45
-  steps:
-  - script: >-
-      mkdir -p "$(Build.SourcesDirectory)/myresult123456-scenario" &&
-      echo "KnownIssue" > "$(Build.SourcesDirectory)/myresult123456-scenario/my-result-123456.txt"
-    displayName: Create test result file
-  - template: /eng/common/templates/steps/send-to-helix.yml
-    parameters:
-      HelixSource: pr/public/maestro-auth-test/build-result-analysis-test/$(Build.SourceBranch)
-      HelixType: type/tests
-      HelixTargetQueues: Windows.11.Arm64.Open;
-      CorrelationPayloadDirectory: $(Build.SourcesDirectory)/myresult123456-scenario
-      XUnitProjects: $(Build.SourcesDirectory)/src/TestAggregatorHelixTests/TestAggregatorHelixTests.csproj
-      XUnitPublishTargetFramework: net10.0
-      XUnitRuntimeTargetFramework: netcoreapp2.0
-      XUnitRunnerVersion: 2.4.2
-      IncludeDotNetCli: true
-      WaitForWorkItemCompletion: false
-      HelixProjectArguments: /p:EnableHelixJobMonitor=true
-      DotNetCliPackageType: sdk
-      DotNetCliVersion: 10.0.400
-      Creator: dotnet-helix-low-bot
+stages:
+- stage: A
+  displayName: Early failures
+  jobs:
+  - job: FailFast
+    displayName: Fail fast with an unmatched test
+    steps:
+    - task: UseDotNet@2
+      inputs:
+        packageType: sdk
+        useGlobalJson: true
+    - task: DotNetCoreCLI@2
+      displayName: Run failing test
+      inputs:
+        command: test
+        projects: src/StreamingFailure.Tests/StreamingFailure.Tests.csproj
+        publishTestResults: true
 
-- job: HelixJobMonitor
-  displayName: Monitor Helix Jobs
-  dependsOn: ScenarioHelixTest
-  condition: succeededOrFailed()
-  timeoutInMinutes: 45
-  steps:
-  - script: ./eng/common/dotnet.sh tool restore --configfile .config/helix-monitor.nuget.config
-    displayName: Restore Helix Job Monitor
-  - script: >-
-      ./eng/common/dotnet.sh tool run dotnet-helix-job-monitor --
-      --organization maestro-auth-test
-      --repository build-result-analysis-test
-      --build-reason "$(Build.Reason)"
-      --source-branch "$(Build.SourceBranch)"
-      --stage-name "$(System.StageName)"
-      --stage-attempt "$(System.StageAttempt)"
-      --job-attempt "$(System.JobAttempt)"
-      --max-wait-minutes 40
-      --use-fully-qualified-test-name true
+  - job: SubmitHelix
+    displayName: Submit failing Helix test
+    dependsOn: []
+    timeoutInMinutes: 45
+    steps:
+    - script: >-
+        mkdir -p "$(Build.SourcesDirectory)/streaming-payload" &&
+        echo "Pass" > "$(Build.SourcesDirectory)/streaming-payload/my-result-123456.txt"
+      displayName: Create correlation payload
+    - template: /eng/common/templates/steps/send-to-helix.yml
+      parameters:
+        HelixSource: pr/public/maestro-auth-test/build-result-analysis-test/$(Build.SourceBranch)
+        HelixType: type/tests
+        HelixTargetQueues: Windows.11.Arm64.Open;
+        CorrelationPayloadDirectory: $(Build.SourcesDirectory)/streaming-payload
+        XUnitProjects: $(Build.SourcesDirectory)/src/TestAggregatorHelixTests/TestAggregatorHelixTests.csproj
+        XUnitPublishTargetFramework: net10.0
+        XUnitRuntimeTargetFramework: netcoreapp2.0
+        XUnitRunnerVersion: 2.4.2
+        IncludeDotNetCli: true
+        WaitForWorkItemCompletion: false
+        HelixProjectArguments: /p:EnableHelixJobMonitor=true
+        DotNetCliPackageType: sdk
+        DotNetCliVersion: 10.0.400
+        Creator: dotnet-helix-low-bot
+
+  - job: HelixJobMonitor
     displayName: Monitor Helix Jobs
-    env:
-      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+    dependsOn: SubmitHelix
+    condition: succeededOrFailed()
+    continueOnError: ${{ parameters.continueOnError }}
+    timeoutInMinutes: 45
+    steps:
+    - script: ./eng/common/dotnet.sh tool restore --configfile .config/helix-monitor.nuget.config
+      displayName: Restore Helix Job Monitor
+    - script: >-
+        ./eng/common/dotnet.sh tool run dotnet-helix-job-monitor --
+        --organization maestro-auth-test
+        --repository build-result-analysis-test
+        --build-reason "$(Build.Reason)"
+        --source-branch "$(Build.SourceBranch)"
+        --stage-name "$(System.StageName)"
+        --stage-attempt "$(System.StageAttempt)"
+        --job-attempt "$(System.JobAttempt)"
+        --max-wait-minutes 40
+        --use-fully-qualified-test-name true
+      displayName: Monitor Helix Jobs
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+- stage: B
+  displayName: Hold after early failures
+  dependsOn: A
+  condition: succeededOrFailed()
+  jobs:
+  - job: Hold
+    timeoutInMinutes: 20
+    steps:
+    - script: sleep 900
+      displayName: Keep the pipeline active for 15 minutes
